@@ -1,7 +1,7 @@
 """
 Data models for the job queue system.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -34,8 +34,8 @@ class Job:
         self.state = state
         self.attempts = attempts
         self.max_retries = max_retries
-        self.created_at = created_at or datetime.utcnow().isoformat()
-        self.updated_at = updated_at or datetime.utcnow().isoformat()
+        self.created_at = created_at or datetime.now(timezone.utc).isoformat()
+        self.updated_at = updated_at or datetime.now(timezone.utc).isoformat()
 
     def to_dict(self):
         """Convert Job to dictionary for storage."""

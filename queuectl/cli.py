@@ -1,5 +1,9 @@
 """CLI command definitions for queuectl."""
 import click
+import json
+import uuid
+from queuectl.models import Job
+from queuectl.storage import Storage
 
 
 @click.group()
@@ -13,11 +17,89 @@ def main():
 @click.argument('job_json', required=True)
 def enqueue(job_json):
     """Add a new job to the queue.
-    
+
     JOB_JSON: JSON string containing job data (e.g., '{"id":"job1","command":"sleep 2"}')
     """
-    click.echo(f"Enqueue command called with: {job_json}")
-    # TODO: Implement job enqueue logic in Phase 3
+    # Step 1: Parse JSON with error handling
+    try:
+        job_data = json.loads(job_json)
+    except json.JSONDecodeError as e:
+        click.echo(f"Error: Invalid JSON - {e.msg}", err=True)
+        click.echo(f"Position: line {e.lineno}, column {e.colno}", err=True)
+        click.echo("\nExample of valid JSON:", err=True)
+        click.echo('  {"command": "echo hello"}', err=True)
+        raise click.Abort()
+
+    # Check that we got a dictionary (not a list, string, etc.)
+    if not isinstance(job_data, dict):
+        click.echo("Error: JSON must be an object (dictionary), not a list or primitive value", err=True)
+        click.echo("\nExample of valid JSON:", err=True)
+        click.echo('  {"command": "echo hello"}', err=True)
+        raise click.Abort()
+
+    click.echo(f"✓ Successfully parsed JSON with {len(job_data)} field(s)")
+
+    # Step 2: Validate required fields
+    # Check if 'command' field exists
+    if 'command' not in job_data:
+        click.echo("Error: Missing required field 'command'", err=True)
+        click.echo("\nThe 'command' field is required and must contain the shell command to execute.", err=True)
+        click.echo("\nExample:", err=True)
+        click.echo('  {"command": "echo hello"}', err=True)
+        raise click.Abort()
+
+    # Check if 'command' is not empty
+    if not job_data['command'] or not str(job_data['command']).strip():
+        click.echo("Error: Field 'command' cannot be empty", err=True)
+        click.echo("\nThe 'command' field must contain a valid shell command.", err=True)
+        click.echo("\nExample:", err=True)
+        click.echo('  {"command": "echo hello"}', err=True)
+        raise click.Abort()
+
+    # Validate 'id' field if provided (must not be empty)
+    if 'id' in job_data and (not job_data['id'] or not str(job_data['id']).strip()):
+        click.echo("Error: Field 'id' cannot be empty", err=True)
+        click.echo("\nIf you provide an 'id' field, it must not be empty.", err=True)
+        click.echo("Tip: You can omit the 'id' field and one will be auto-generated.", err=True)
+        raise click.Abort()
+
+    click.echo(f"✓ Validation passed")
+
+    # Step 3: Generate UUID if 'id' not provided
+    if 'id' not in job_data or not job_data['id']:
+        job_data['id'] = str(uuid.uuid4())
+        click.echo(f"✓ Generated job ID: {job_data['id']}")
+    else:
+        click.echo(f"✓ Using provided job ID: {job_data['id']}")
+
+    click.echo(f"  Command: {job_data['command']}")
+
+    # Step 4: Save job to database
+    try:
+        # Create Storage instance
+        storage = Storage()
+
+        # Create Job object with validated data
+        job = Job(
+            id=job_data['id'],
+            command=job_data['command'],
+            state='pending',
+            attempts=0,
+            max_retries=job_data.get('max_retries', 3)  # Allow optional max_retries
+        )
+
+        # Save to database
+        storage.create_job(job.to_dict())
+
+        click.echo(f"\n✓ Job successfully enqueued!")
+        click.echo(f"  Job ID: {job.id}")
+        click.echo(f"  State: {job.state}")
+        click.echo(f"  Max Retries: {job.max_retries}")
+
+    except Exception as e:
+        click.echo(f"\nError: Failed to save job to database", err=True)
+        click.echo(f"  {str(e)}", err=True)
+        raise click.Abort()
 
 
 @main.group()
@@ -51,15 +133,46 @@ def status():
 
 
 @main.command()
-@click.option('--state', type=click.Choice(['pending', 'processing', 'completed', 'failed', 'dead']), 
+@click.option('--state', type=click.Choice(['pending', 'processing', 'completed', 'failed', 'dead']),
               help='Filter jobs by state')
 def list(state):
     """List jobs by state."""
-    if state:
-        click.echo(f"Listing jobs with state: {state}")
-    else:
-        click.echo("Listing all jobs")
-    # TODO: Implement list logic in Phase 3
+    try:
+        # Create Storage instance
+        storage = Storage()
+
+        # Query jobs with optional state filter
+        jobs = storage.list_jobs(state=state)
+
+        # Display header
+        if state:
+            click.echo(f"Jobs with state: {state}")
+        else:
+            click.echo("All jobs")
+        click.echo("-" * 80)
+
+        # Check if any jobs found
+        if not jobs:
+            click.echo("No jobs found.")
+            return
+
+        # Display each job
+        for job in jobs:
+            click.echo(f"\nJob ID: {job['id']}")
+            click.echo(f"  Command: {job['command']}")
+            click.echo(f"  State: {job['state']}")
+            click.echo(f"  Attempts: {job['attempts']}/{job['max_retries']}")
+            click.echo(f"  Created: {job['created_at']}")
+            click.echo(f"  Updated: {job['updated_at']}")
+
+        # Show total count
+        click.echo("-" * 80)
+        click.echo(f"Total: {len(jobs)} job(s)")
+
+    except Exception as e:
+        click.echo(f"Error: Failed to list jobs", err=True)
+        click.echo(f"  {str(e)}", err=True)
+        raise click.Abort()
 
 
 @main.group()
