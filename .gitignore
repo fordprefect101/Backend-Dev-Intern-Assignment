@@ -44,3 +44,8 @@ Thumbs.db
 
 # Project specific
 *.log
+
+# Documentation (private)
+plan.md
+IMPLEMENTATION_SUMMARY.md
+assignment.md

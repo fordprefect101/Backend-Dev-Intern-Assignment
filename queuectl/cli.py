@@ -2,8 +2,11 @@
 import click
 import json
 import uuid
+import multiprocessing
+import time
 from queuectl.models import Job
 from queuectl.storage import Storage
+from queuectl.worker import Worker
 
 
 @click.group()
@@ -108,12 +111,81 @@ def worker():
     pass
 
 
+def worker_process_runner(worker_id: str):
+    """
+    Function to run a worker in a separate process.
+
+    This is called by multiprocessing.Process() for each worker.
+
+    Args:
+        worker_id: Unique identifier for this worker
+    """
+    worker_instance = Worker(worker_id=worker_id)
+    worker_instance.run()
+
+
 @worker.command()
 @click.option('--count', default=1, type=int, help='Number of workers to start')
 def start(count):
     """Start one or more worker processes."""
-    click.echo(f"Starting {count} worker(s)")
-    # TODO: Implement worker start logic in Phase 6
+    if count < 1:
+        click.echo("Error: Count must be at least 1", err=True)
+        raise click.Abort()
+
+    if count > 10:
+        click.echo("Warning: Starting more than 10 workers may cause performance issues.")
+        if not click.confirm("Continue anyway?"):
+            raise click.Abort()
+
+    try:
+        click.echo(f"Starting {count} worker(s)...\n")
+
+        # Create a list to hold worker processes
+        processes = []
+
+        # Start worker processes
+        for i in range(count):
+            worker_id = f"worker-{i+1}"
+
+            # Create a new process for this worker
+            process = multiprocessing.Process(
+                target=worker_process_runner,
+                args=(worker_id,),
+                name=worker_id
+            )
+
+            # Start the process
+            process.start()
+            processes.append(process)
+
+            click.echo(f"✓ Started {worker_id} (PID: {process.pid})")
+
+        click.echo(f"\n{count} worker(s) running. Press Ctrl+C to stop all workers.\n")
+
+        # Wait for all processes to complete
+        # This blocks until user presses Ctrl+C or workers exit
+        try:
+            for process in processes:
+                process.join()  # Wait for process to finish
+        except KeyboardInterrupt:
+            click.echo("\n\nShutting down all workers...")
+
+            # Terminate all worker processes
+            for process in processes:
+                if process.is_alive():
+                    click.echo(f"  Stopping {process.name}...")
+                    process.terminate()
+
+            # Wait for all processes to terminate
+            for process in processes:
+                process.join(timeout=5)  # Wait up to 5 seconds
+
+            click.echo("All workers stopped.")
+
+    except Exception as e:
+        click.echo(f"Error: Failed to start workers", err=True)
+        click.echo(f"  {str(e)}", err=True)
+        raise click.Abort()
 
 
 @worker.command()
@@ -126,10 +198,46 @@ def stop():
 @main.command()
 def status():
     """Show summary of all job states & active workers."""
-    click.echo("Status:")
-    click.echo("  Jobs: pending=0, processing=0, completed=0, failed=0, dead=0")
-    click.echo("  Workers: active=0")
-    # TODO: Implement status logic in Phase 7
+    try:
+        storage = Storage()
+        counts = storage.get_job_counts()
+
+        # Calculate total
+        total = sum(counts.values())
+
+        click.echo("Job Queue Status")
+        click.echo("=" * 50)
+        click.echo("\nJobs by State:")
+        click.echo(f"  Pending:     {counts['pending']:>6}")
+        click.echo(f"  Processing:  {counts['processing']:>6}")
+        click.echo(f"  Completed:   {counts['completed']:>6}")
+        click.echo(f"  Failed:      {counts['failed']:>6}")
+        click.echo(f"  Dead (DLQ):  {counts['dead']:>6}")
+        click.echo("-" * 50)
+        click.echo(f"  Total:       {total:>6}")
+
+        # Show percentage if there are jobs
+        if total > 0:
+            click.echo("\nCompletion Rate:")
+            completion_rate = (counts['completed'] / total) * 100
+            click.echo(f"  {completion_rate:.1f}% ({counts['completed']}/{total})")
+
+            if counts['dead'] > 0:
+                failure_rate = (counts['dead'] / total) * 100
+                click.echo(f"\nPermanent Failures:")
+                click.echo(f"  {failure_rate:.1f}% ({counts['dead']}/{total})")
+
+        # Show active work
+        active_jobs = counts['pending'] + counts['processing']
+        if active_jobs > 0:
+            click.echo(f"\nActive/Pending Work: {active_jobs} job(s)")
+
+        click.echo("=" * 50)
+
+    except Exception as e:
+        click.echo(f"Error: Failed to get status", err=True)
+        click.echo(f"  {str(e)}", err=True)
+        raise click.Abort()
 
 
 @main.command()
@@ -183,20 +291,103 @@ def dlq():
 
 @dlq.command(name='list')
 def dlq_list():
-    """List jobs in the Dead Letter Queue."""
-    click.echo("Dead Letter Queue jobs:")
-    # TODO: Implement DLQ list logic in Phase 7
+    """List jobs in the Dead Letter Queue (permanently failed jobs)."""
+    try:
+        # Create Storage instance
+        storage = Storage()
+
+        # Query for dead jobs
+        dead_jobs = storage.list_jobs(state='dead')
+
+        # Display header
+        click.echo("Dead Letter Queue (DLQ)")
+        click.echo("=" * 80)
+        click.echo("These jobs have failed permanently after exhausting all retries.\n")
+
+        # Check if any jobs found
+        if not dead_jobs:
+            click.echo("No jobs in DLQ.")
+            click.echo("\nTip: Jobs are sent to DLQ after failing max_retries times.")
+            return
+
+        # Display each dead job
+        for job in dead_jobs:
+            click.echo(f"\nJob ID: {job['id']}")
+            click.echo(f"  Command: {job['command']}")
+            click.echo(f"  State: {job['state']}")
+            click.echo(f"  Failed Attempts: {job['attempts']}/{job['max_retries']}")
+            click.echo(f"  Created: {job['created_at']}")
+            click.echo(f"  Last Updated: {job['updated_at']}")
+
+        # Show total count
+        click.echo("=" * 80)
+        click.echo(f"Total jobs in DLQ: {len(dead_jobs)}")
+        click.echo("\nTo retry a job: queuectl dlq retry <JOB_ID>")
+
+    except Exception as e:
+        click.echo(f"Error: Failed to list DLQ jobs", err=True)
+        click.echo(f"  {str(e)}", err=True)
+        raise click.Abort()
 
 
 @dlq.command()
 @click.argument('job_id', required=True)
 def retry(job_id):
     """Retry a job from the Dead Letter Queue.
-    
+
+    Resets a dead job back to pending state so it can be retried by a worker.
+    The job's attempt counter is reset to 0, giving it full retries again.
+
     JOB_ID: The ID of the job to retry
+
+    Example:
+      queuectl dlq retry abc-123
     """
-    click.echo(f"Retrying job: {job_id}")
-    # TODO: Implement DLQ retry logic in Phase 7
+    try:
+        storage = Storage()
+
+        # Check if job exists
+        job = storage.get_job(job_id)
+
+        if not job:
+            click.echo(f"Error: Job '{job_id}' not found", err=True)
+            raise click.Abort()
+
+        # Check if job is in DLQ (dead state)
+        if job['state'] != 'dead':
+            click.echo(f"Error: Job '{job_id}' is not in Dead Letter Queue", err=True)
+            click.echo(f"  Current state: {job['state']}", err=True)
+            click.echo(f"\nOnly jobs in 'dead' state can be retried from DLQ.", err=True)
+            click.echo(f"Use 'queuectl dlq list' to see jobs in DLQ.", err=True)
+            raise click.Abort()
+
+        # Show job info before retry
+        click.echo(f"Job '{job_id}':")
+        click.echo(f"  Command: {job['command']}")
+        click.echo(f"  Previous attempts: {job['attempts']}/{job['max_retries']}")
+
+        # Confirm retry
+        if not click.confirm("\nRetry this job?"):
+            click.echo("Cancelled.")
+            raise click.Abort()
+
+        # Reset job to pending state with attempts back to 0
+        storage.update_job(job_id, {
+            'state': 'pending',
+            'attempts': 0,
+            'locked_by': None,
+            'locked_at': None
+        })
+
+        click.echo(f"\n✓ Job '{job_id}' has been reset and moved back to the queue")
+        click.echo(f"  New state: pending")
+        click.echo(f"  Attempts reset to: 0/{job['max_retries']}")
+        click.echo(f"\nThe job will be picked up by the next available worker.")
+
+    except Exception as e:
+        click.echo(f"Error: Failed to retry job", err=True)
+        click.echo(f"  {str(e)}", err=True)
+        raise click.Abort()
 
 
 @main.group()
@@ -210,12 +401,102 @@ def config():
 @click.argument('value', required=True)
 def set(key, value):
     """Set a configuration value.
-    
+
     KEY: Configuration key (e.g., max-retries, backoff-base)
     VALUE: Configuration value
+
+    Examples:
+      queuectl config set max-retries 5
+      queuectl config set backoff-base 2
     """
-    click.echo(f"Setting config: {key} = {value}")
-    # TODO: Implement config set logic in Phase 7
+    try:
+        storage = Storage()
+
+        # Validate known config keys (optional - warn if unknown)
+        known_keys = ['max-retries', 'backoff-base']
+        if key not in known_keys:
+            click.echo(f"Warning: '{key}' is not a standard config key.", err=True)
+            click.echo(f"Known keys: {', '.join(known_keys)}", err=True)
+            if not click.confirm("Set it anyway?"):
+                raise click.Abort()
+
+        # Store the config
+        storage.set_config(key, value)
+
+        click.echo(f"✓ Configuration updated:")
+        click.echo(f"  {key} = {value}")
+
+    except Exception as e:
+        click.echo(f"Error: Failed to set configuration", err=True)
+        click.echo(f"  {str(e)}", err=True)
+        raise click.Abort()
+
+
+@config.command()
+@click.argument('key', required=True)
+def get(key):
+    """Get a configuration value.
+
+    KEY: Configuration key to retrieve
+
+    Examples:
+      queuectl config get max-retries
+      queuectl config get backoff-base
+    """
+    try:
+        storage = Storage()
+
+        # Define defaults for known keys
+        defaults = {
+            'max-retries': '3',
+            'backoff-base': '2'
+        }
+
+        default = defaults.get(key)
+        value = storage.get_config(key, default)
+
+        if value:
+            click.echo(f"{key} = {value}")
+
+            # Show if it's the default
+            if value == default and default:
+                click.echo(f"  (default value)")
+        else:
+            click.echo(f"{key} is not set")
+            if default:
+                click.echo(f"  Default would be: {default}")
+
+    except Exception as e:
+        click.echo(f"Error: Failed to get configuration", err=True)
+        click.echo(f"  {str(e)}", err=True)
+        raise click.Abort()
+
+
+@config.command(name='list')
+def list_config():
+    """List all configuration values."""
+    try:
+        storage = Storage()
+        config = storage.list_config()
+
+        if not config:
+            click.echo("No configuration values set.")
+            click.echo("\nDefaults:")
+            click.echo("  max-retries = 3")
+            click.echo("  backoff-base = 2")
+            return
+
+        click.echo("Configuration:")
+        click.echo("-" * 40)
+        for key, value in config.items():
+            click.echo(f"  {key} = {value}")
+        click.echo("-" * 40)
+        click.echo(f"Total: {len(config)} value(s)")
+
+    except Exception as e:
+        click.echo(f"Error: Failed to list configuration", err=True)
+        click.echo(f"  {str(e)}", err=True)
+        raise click.Abort()
 
 
 if __name__ == '__main__':
