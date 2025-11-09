@@ -54,3 +54,4 @@ PRODUCTION_ROADMAP.md
 # Tests
 tests/
 pytest.ini
+CLI_DEMO.md

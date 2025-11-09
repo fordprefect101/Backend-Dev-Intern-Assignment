@@ -786,17 +786,5 @@ def my_query(self):
 - ✅ Phase 6: Multi-Worker Support & Race Condition Prevention
 - ✅ Phase 7: Configuration & Polish
 
-## License
 
-MIT License - See LICENSE file for details
-
-## Contributing
-
-Contributions welcome! Please open an issue or pull request.
-
-## Support
-
-For issues or questions:
-- GitHub Issues: https://github.com/fordprefect101/Backend-Dev-Intern-Assignment/issues
-- Documentation: See IMPLEMENTATION_SUMMARY.md for detailed implementation guide
-
+Video Demo: https://drive.google.com/file/d/15sYdHIAw30pxto_TnDfIfLdpdkwpGzfa/view?usp=sharing
