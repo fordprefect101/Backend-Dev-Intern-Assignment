@@ -68,6 +68,7 @@ class Storage:
             CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY,
                 command TEXT NOT NULL,
+                priority TEXT DEFAULT 'medium',
                 state TEXT NOT NULL,
                 attempts INTEGER DEFAULT 0,
                 max_retries INTEGER DEFAULT 3,
@@ -93,11 +94,20 @@ class Storage:
             ON jobs(state)
         """)
 
+        # Create index on priority for faster queries
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_jobs_priority
+            ON jobs(priority)
+        """)
+
         # Migrate existing database: Add locking columns if they don't exist
         self._migrate_add_locking_fields(conn)
 
         # Migrate existing database: Add retry scheduling field
         self._migrate_add_retry_at_field(conn)
+
+        # Migrate existing database: Add priority field
+        self._migrate_add_priority_field(conn)
 
         conn.commit()
 
@@ -135,6 +145,21 @@ class Storage:
         if 'next_retry_at' not in columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN next_retry_at TEXT")
 
+    def _migrate_add_priority_field(self, conn: sqlite3.Connection):
+        """
+        Migration: Add priority field to existing jobs table.
+
+        This handles databases created before priority queue implementation.
+        Safely adds priority column if it doesn't exist.
+        """
+        # Check if priority column exists
+        cursor = conn.execute("PRAGMA table_info(jobs)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        # Add priority if missing (default to 'medium')
+        if 'priority' not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN priority TEXT DEFAULT 'medium'")
+
     def get_connection(self):
         """
         Public method to get a database connection.
@@ -168,11 +193,12 @@ class Storage:
         """
         with self._get_connection() as conn:
             conn.execute("""
-                INSERT INTO jobs (id, command, state, attempts, max_retries, created_at, updated_at, next_retry_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO jobs (id, command, priority, state, attempts, max_retries, created_at, updated_at, next_retry_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 job_data['id'],
                 job_data['command'],
+                job_data.get('priority', 'medium'),
                 job_data['state'],
                 job_data.get('attempts', 0),
                 job_data.get('max_retries', 3),
@@ -200,7 +226,7 @@ class Storage:
         """
         with self._get_connection() as conn:
             cursor = conn.execute("""
-                SELECT id, command, state, attempts, max_retries, created_at, updated_at, locked_by, locked_at, next_retry_at
+                SELECT id, command, priority, state, attempts, max_retries, created_at, updated_at, locked_by, locked_at, next_retry_at
                 FROM jobs
                 WHERE id = ?
             """, (job_id,))
@@ -284,7 +310,7 @@ class Storage:
             completed_jobs = storage.list_jobs(state='completed', limit=10)
         """
         sql = """
-            SELECT id, command, state, attempts, max_retries, created_at, updated_at, locked_by, locked_at, next_retry_at
+            SELECT id, command, priority, state, attempts, max_retries, created_at, updated_at, locked_by, locked_at, next_retry_at
             FROM jobs
         """
         params = []
@@ -348,13 +374,21 @@ class Storage:
                 now = datetime.now(timezone.utc).isoformat()
 
                 # Find first pending job that isn't locked and is ready for retry
+                # Order by priority (high > medium > low) then by creation time
                 cursor = conn.execute("""
-                    SELECT id, command, state, attempts, max_retries, created_at, updated_at, locked_by, locked_at, next_retry_at
+                    SELECT id, command, priority, state, attempts, max_retries, created_at, updated_at, locked_by, locked_at, next_retry_at
                     FROM jobs
                     WHERE state = 'pending'
                       AND locked_by IS NULL
                       AND (next_retry_at IS NULL OR next_retry_at <= ?)
-                    ORDER BY created_at ASC
+                    ORDER BY
+                        CASE priority
+                            WHEN 'high' THEN 1
+                            WHEN 'medium' THEN 2
+                            WHEN 'low' THEN 3
+                            ELSE 2
+                        END ASC,
+                        created_at ASC
                     LIMIT 1
                 """, (now,))
 
@@ -485,5 +519,44 @@ class Storage:
             # Update with actual counts
             for row in rows:
                 counts[row['state']] = row['count']
+
+            return counts
+
+    def get_priority_counts(self) -> Dict[str, int]:
+        """
+        Get count of jobs by priority.
+
+        Returns:
+            Dictionary mapping priority to count
+            Example: {'high': 10, 'medium': 50, 'low': 20}
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT priority, COUNT(*) as count
+                FROM jobs
+                WHERE state IN ('pending', 'processing')
+                GROUP BY priority
+                ORDER BY
+                    CASE priority
+                        WHEN 'high' THEN 1
+                        WHEN 'medium' THEN 2
+                        WHEN 'low' THEN 3
+                        ELSE 4
+                    END ASC
+            """)
+            rows = cursor.fetchall()
+
+            # Create dict with all priorities initialized to 0
+            counts = {
+                'high': 0,
+                'medium': 0,
+                'low': 0
+            }
+
+            # Update with actual counts
+            for row in rows:
+                priority = row['priority'] or 'medium'
+                if priority in counts:
+                    counts[priority] = row['count']
 
             return counts

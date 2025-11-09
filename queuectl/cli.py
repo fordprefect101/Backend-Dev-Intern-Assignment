@@ -66,6 +66,20 @@ def enqueue(job_json):
         click.echo("Tip: You can omit the 'id' field and one will be auto-generated.", err=True)
         raise click.Abort()
 
+    # Validate 'priority' field if provided (must be 'high', 'medium', or 'low')
+    valid_priorities = ['high', 'medium', 'low']
+    if 'priority' in job_data:
+        priority = str(job_data['priority']).lower()
+        if priority not in valid_priorities:
+            click.echo(f"Error: Invalid priority '{job_data['priority']}'", err=True)
+            click.echo(f"\nPriority must be one of: {', '.join(valid_priorities)}", err=True)
+            click.echo("\nExample:", err=True)
+            click.echo('  {"command": "echo hello", "priority": "high"}', err=True)
+            raise click.Abort()
+        job_data['priority'] = priority  # Normalize to lowercase
+    else:
+        job_data['priority'] = 'medium'  # Default priority
+
     click.echo(f"✓ Validation passed")
 
     # Step 3: Generate UUID if 'id' not provided
@@ -86,6 +100,7 @@ def enqueue(job_json):
         job = Job(
             id=job_data['id'],
             command=job_data['command'],
+            priority=job_data['priority'],
             state='pending',
             attempts=0,
             max_retries=job_data.get('max_retries', 3)  # Allow optional max_retries
@@ -96,6 +111,7 @@ def enqueue(job_json):
 
         click.echo(f"\n✓ Job successfully enqueued!")
         click.echo(f"  Job ID: {job.id}")
+        click.echo(f"  Priority: {job.priority}")
         click.echo(f"  State: {job.state}")
         click.echo(f"  Max Retries: {job.max_retries}")
 
@@ -232,6 +248,15 @@ def status():
         if active_jobs > 0:
             click.echo(f"\nActive/Pending Work: {active_jobs} job(s)")
 
+            # Show priority breakdown for active jobs
+            priority_counts = storage.get_priority_counts()
+            priority_total = sum(priority_counts.values())
+            if priority_total > 0:
+                click.echo("\nActive Jobs by Priority:")
+                click.echo(f"  High:        {priority_counts['high']:>6}")
+                click.echo(f"  Medium:      {priority_counts['medium']:>6}")
+                click.echo(f"  Low:         {priority_counts['low']:>6}")
+
         click.echo("=" * 50)
 
     except Exception as e:
@@ -268,6 +293,7 @@ def list(state):
         for job in jobs:
             click.echo(f"\nJob ID: {job['id']}")
             click.echo(f"  Command: {job['command']}")
+            click.echo(f"  Priority: {job.get('priority', 'medium')}")
             click.echo(f"  State: {job['state']}")
             click.echo(f"  Attempts: {job['attempts']}/{job['max_retries']}")
             click.echo(f"  Created: {job['created_at']}")
@@ -314,6 +340,7 @@ def dlq_list():
         for job in dead_jobs:
             click.echo(f"\nJob ID: {job['id']}")
             click.echo(f"  Command: {job['command']}")
+            click.echo(f"  Priority: {job.get('priority', 'medium')}")
             click.echo(f"  State: {job['state']}")
             click.echo(f"  Failed Attempts: {job['attempts']}/{job['max_retries']}")
             click.echo(f"  Created: {job['created_at']}")

@@ -12,6 +12,7 @@ class Job:
     Attributes:
         id: Unique identifier for the job
         command: Shell command to execute
+        priority: Job priority (high, medium, low) - default is medium
         state: Current state (pending, processing, completed, failed, dead)
         attempts: Number of times job has been attempted
         max_retries: Maximum number of retry attempts allowed
@@ -24,6 +25,7 @@ class Job:
         self,
         id: str,
         command: str,
+        priority: str = "medium",
         state: str = "pending",
         attempts: int = 0,
         max_retries: int = 3,
@@ -33,6 +35,7 @@ class Job:
     ):
         self.id = id
         self.command = command
+        self.priority = priority
         self.state = state
         self.attempts = attempts
         self.max_retries = max_retries
@@ -45,6 +48,7 @@ class Job:
         return {
             'id': self.id,
             'command': self.command,
+            'priority': self.priority,
             'state': self.state,
             'attempts': self.attempts,
             'max_retries': self.max_retries,
@@ -59,6 +63,7 @@ class Job:
         return cls(
             id=data['id'],
             command=data['command'],
+            priority=data.get('priority', 'medium'),
             state=data['state'],
             attempts=data['attempts'],
             max_retries=data['max_retries'],

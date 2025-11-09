@@ -1,17 +1,18 @@
 # queuectl - CLI Job Queue System
 
-A production-grade CLI-based background job queue system built with Python. Features include worker process management, automatic retry with exponential backoff, Dead Letter Queue (DLQ) support, and race-condition-free multi-worker concurrency.
+A production-grade CLI-based background job queue system built with Python. Features include worker process management, priority queue support, automatic retry with exponential backoff, Dead Letter Queue (DLQ) support, and race-condition-free multi-worker concurrency.
 
 ## Features
 
 - **Job Queue Management**: Enqueue shell commands as jobs with automatic state tracking
+- **Priority Queue**: Jobs processed by priority (high > medium > low) then FIFO within same priority
 - **Multi-Worker Support**: Run multiple worker processes concurrently with atomic job claiming
 - **Race Condition Prevention**: Production-grade SQLite locking ensures each job is processed exactly once
 - **Automatic Retry**: Failed jobs automatically retry with configurable max retries
 - **Dead Letter Queue (DLQ)**: Permanently failed jobs are moved to DLQ for manual review and retry
 - **Exit Code Processing**: Jobs succeed (exit code 0) or fail (non-zero) based on command execution
 - **Configuration Management**: Persistent configuration storage for system settings
-- **Status Reporting**: Real-time job queue statistics and completion rates
+- **Status Reporting**: Real-time job queue statistics and completion rates with priority breakdown
 - **Graceful Shutdown**: Workers finish current jobs before stopping (Ctrl+C safe)
 - **SQLite Persistence**: All data persisted to database with ACID guarantees
 
@@ -105,7 +106,27 @@ $ queuectl enqueue '{"command":"curl api.example.com","max_retries":5}'
   Max Retries: 5
 ```
 
-**Example 4: Complex commands**
+**Example 4: Job with priority**
+```bash
+# High priority job
+$ queuectl enqueue '{"command":"critical-task.sh","priority":"high"}'
+✓ Job successfully enqueued!
+  Job ID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+  Command: critical-task.sh
+  Priority: high
+  State: pending
+  Max Retries: 3
+
+# Medium priority (default)
+$ queuectl enqueue '{"command":"normal-task.sh","priority":"medium"}'
+
+# Low priority
+$ queuectl enqueue '{"command":"background-task.sh","priority":"low"}'
+```
+
+**Note**: Priority values are `high`, `medium`, or `low`. Default is `medium`. Jobs are processed in priority order (high > medium > low), then FIFO within the same priority.
+
+**Example 5: Complex commands**
 ```bash
 # Pipes and redirects work
 $ queuectl enqueue '{"command":"cat file.txt | grep error > errors.log"}'
@@ -182,6 +203,11 @@ Permanent Failures:
   3.8% (2/53)
 
 Active/Pending Work: 5 job(s)
+
+Active Jobs by Priority:
+  High:       2
+  Medium:     2
+  Low:        1
 ==================================================
 ```
 
@@ -194,6 +220,7 @@ All jobs
 Job ID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
   Command: echo Hello World
   State: completed
+  Priority: medium
   Attempts: 1/3
   Created: 2025-01-07T10:30:00+00:00
   Updated: 2025-01-07T10:30:05+00:00
@@ -201,6 +228,7 @@ Job ID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 Job ID: my-job-1
   Command: python script.py
   State: pending
+  Priority: high
   Attempts: 0/3
   Created: 2025-01-07T10:31:00+00:00
   Updated: 2025-01-07T10:31:00+00:00
@@ -366,6 +394,7 @@ pending ──────> processing ──────> completed ✓
 **jobs table schema:**
 - `id` (TEXT PRIMARY KEY) - Unique job identifier
 - `command` (TEXT NOT NULL) - Shell command to execute
+- `priority` (TEXT DEFAULT 'medium') - Job priority (high/medium/low)
 - `state` (TEXT NOT NULL) - Job state (pending/processing/completed/failed/dead)
 - `attempts` (INTEGER) - Number of execution attempts
 - `max_retries` (INTEGER) - Maximum retry attempts before DLQ
@@ -392,6 +421,7 @@ pending ──────> processing ──────> completed ✓
 1. **Startup**: Worker initializes and connects to database
 2. **Poll Loop**: Continuously polls for pending jobs (every 1 second)
 3. **Claim Job**: Atomically claims next pending job using `BEGIN IMMEDIATE`
+   - Jobs are selected by priority (high > medium > low), then FIFO within same priority
 4. **Execute**: Runs shell command via `subprocess.run()`
 5. **Update State**: Updates job state based on exit code
 6. **Repeat**: Returns to polling loop
@@ -416,7 +446,9 @@ The system uses SQLite's `BEGIN IMMEDIATE` transactions for atomic job claiming:
 ```python
 # Pseudo-code of atomic claiming
 BEGIN IMMEDIATE;  # Locks database
-SELECT job WHERE state='pending' AND locked_by IS NULL LIMIT 1;
+SELECT job WHERE state='pending' AND locked_by IS NULL 
+  ORDER BY priority (high > medium > low), created_at ASC 
+  LIMIT 1;
 UPDATE job SET state='processing', locked_by='worker-1', locked_at=NOW();
 COMMIT;  # Releases lock
 ```
@@ -535,12 +567,11 @@ Commands are executed with:
 ### Simplifications Made
 
 1. **No job dependencies**: Jobs are independent (no DAG/workflow support)
-2. **No priority queue**: FIFO ordering only (oldest job first)
-3. **No job timeouts per-job**: Global 300s timeout for all jobs
-4. **No distributed workers**: All workers must share same filesystem
-5. **No audit log**: Job history not preserved after deletion
-6. **No resource limits**: No CPU/memory constraints per job
-7. **No authentication**: No user/permission system
+2. **No job timeouts per-job**: Global 300s timeout for all jobs
+3. **No distributed workers**: All workers must share same filesystem
+4. **No audit log**: Job history not preserved after deletion
+5. **No resource limits**: No CPU/memory constraints per job
+6. **No authentication**: No user/permission system
 
 ## 5. Testing Instructions
 

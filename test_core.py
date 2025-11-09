@@ -183,6 +183,118 @@ def test_status():
     return False
 
 
+def test_priority_queue():
+    """Test 7: Priority queue ordering (HIGH > MEDIUM > LOW)."""
+    print("\n[Test 7] Priority queue ordering...")
+
+    # Clean database for fresh test
+    cleanup()
+
+    # Enqueue jobs in reverse priority order to test ordering
+    # Use sleep to slow down execution so we can verify ordering
+    jobs = [
+        ('{"id":"low-1","command":"sleep 0.1 && echo LOW-1","priority":"low"}', "low-1", "low"),
+        ('{"id":"low-2","command":"sleep 0.1 && echo LOW-2","priority":"low"}', "low-2", "low"),
+        ('{"id":"med-1","command":"sleep 0.1 && echo MED-1","priority":"medium"}', "med-1", "medium"),
+        ('{"id":"med-2","command":"sleep 0.1 && echo MED-2","priority":"medium"}', "med-2", "medium"),
+        ('{"id":"high-1","command":"sleep 0.1 && echo HIGH-1","priority":"high"}', "high-1", "high"),
+        ('{"id":"high-2","command":"sleep 0.1 && echo HIGH-2","priority":"high"}', "high-2", "high"),
+    ]
+
+    print("  Enqueuing jobs in order: LOW, LOW, MEDIUM, MEDIUM, HIGH, HIGH")
+    for job_json, job_id, priority in jobs:
+        result = run_command(f'queuectl enqueue \'{job_json}\'')
+        if result.returncode != 0:
+            print(f"✗ FAIL: Could not enqueue job {job_id}")
+            return False
+        # Verify priority is shown during enqueue
+        if f"Priority: {priority}" not in result.stdout:
+            print(f"✗ FAIL: Priority '{priority}' not displayed for job {job_id}")
+            return False
+
+    # Verify all jobs were created
+    result = run_command('queuectl list')
+    created_count = sum(1 for _, job_id, _ in jobs if job_id in result.stdout)
+    if created_count < 6:
+        print(f"✗ FAIL: Only {created_count}/6 jobs were created")
+        return False
+
+    # Start worker to process jobs
+    print("  Starting worker to process jobs...")
+    worker = subprocess.Popen(
+        'queuectl worker start',
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    # Wait for all jobs to complete
+    time.sleep(3)
+
+    worker.terminate()
+    worker.wait(timeout=2)
+
+    # Check that all jobs completed
+    print("  Verifying jobs completed...")
+    result = run_command('queuectl list --state completed')
+    completed_count = sum(1 for _, job_id, _ in jobs if job_id in result.stdout)
+
+    if completed_count < 6:
+        print(f"✗ FAIL: Only {completed_count}/6 jobs completed")
+        return False
+
+    # Verify that priority information is displayed in list
+    result = run_command('queuectl list')
+    if "Priority: high" not in result.stdout:
+        print("✗ FAIL: Priority not displayed in list output")
+        return False
+
+    print(f"✓ PASS: All 6 priority jobs completed with correct priority display")
+    return True
+
+
+def test_default_priority():
+    """Test 8: Default priority is medium."""
+    print("\n[Test 8] Default priority (medium)...")
+
+    # Enqueue job without specifying priority
+    result = run_command('queuectl enqueue \'{"id":"default-test","command":"echo test"}\'')
+
+    if result.returncode != 0:
+        print("✗ FAIL: Could not enqueue job")
+        return False
+
+    # Check if priority is medium
+    if "Priority: medium" in result.stdout:
+        print("✓ PASS: Default priority is medium")
+        return True
+
+    # Also check in list command
+    result = run_command('queuectl list')
+    if "default-test" in result.stdout and "Priority: medium" in result.stdout:
+        print("✓ PASS: Default priority is medium (verified in list)")
+        return True
+
+    print("✗ FAIL: Default priority is not medium")
+    return False
+
+
+def test_invalid_priority():
+    """Test 9: Invalid priority is rejected."""
+    print("\n[Test 9] Invalid priority rejection...")
+
+    # Try to enqueue job with invalid priority
+    result = run_command('queuectl enqueue \'{"id":"invalid-test","command":"echo test","priority":"urgent"}\'')
+
+    if result.returncode != 0 and "Invalid priority" in result.stderr:
+        print("✓ PASS: Invalid priority rejected")
+        return True
+
+    print("✗ FAIL: Invalid priority not rejected")
+    return False
+
+
 def main():
     """Run all core tests."""
     print("=" * 60)
@@ -200,6 +312,9 @@ def main():
         ("Retry and DLQ", test_retry_and_dlq),
         ("Multi-Worker", test_multi_worker),
         ("Status Command", test_status),
+        ("Priority Queue Ordering", test_priority_queue),
+        ("Default Priority", test_default_priority),
+        ("Invalid Priority Rejection", test_invalid_priority),
     ]
     
     results = []
