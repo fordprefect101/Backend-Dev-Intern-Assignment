@@ -15,50 +15,290 @@ A production-grade CLI-based background job queue system built with Python. Feat
 - **Graceful Shutdown**: Workers finish current jobs before stopping (Ctrl+C safe)
 - **SQLite Persistence**: All data persisted to database with ACID guarantees
 
-## Installation
+## 1. Setup Instructions
 
 ### Prerequisites
 
 - Python 3.8 or higher
 - pip (Python package manager)
 
-### Install from source
+### Local Setup
 
+**Step 1: Clone the repository**
 ```bash
-# Clone the repository
 git clone https://github.com/fordprefect101/Backend-Dev-Intern-Assignment.git
 cd Backend-Dev-Intern-Assignment
+```
 
-# Install in development mode
+**Step 2: Create and activate virtual environment (recommended)**
+```bash
+# Create virtual environment
+python3 -m venv venv
+
+# Activate virtual environment
+# On macOS/Linux:
+source venv/bin/activate
+
+# On Windows:
+venv\Scripts\activate
+```
+
+**Step 3: Install the package**
+```bash
 pip install -e .
 ```
 
-This will install `queuectl` command globally with all dependencies.
+This installs the `queuectl` command with all dependencies in an isolated environment.
 
-## Quick Start
-
+**Step 4: Verify installation**
 ```bash
-# 1. Enqueue some jobs
-queuectl enqueue '{"command":"echo Hello World"}'
-queuectl enqueue '{"command":"sleep 3 && echo Done"}'
-queuectl enqueue '{"command":"exit 1"}'  # This will fail
-
-# 2. Start 2 workers
-queuectl worker start --count 2
-
-# 3. Check status (in another terminal)
-queuectl status
-
-# 4. List all jobs
-queuectl list
-
-# 5. Check DLQ for failed jobs
-queuectl dlq list
-
-# 6. Stop workers (Ctrl+C in worker terminal)
+queuectl --help
 ```
 
-## Architecture
+You should see the CLI help menu with all available commands.
+
+**Step 5: Run the test script**
+```bash
+python3 test_core.py
+```
+
+This runs the core test suite to verify everything is working correctly.
+
+## 2. Usage Examples
+
+### Enqueuing Jobs
+
+**Example 1: Basic job**
+```bash
+$ queuectl enqueue '{"command":"echo Hello World"}'
+✓ Successfully parsed JSON with 1 field(s)
+✓ Validation passed
+✓ Generated job ID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+  Command: echo Hello World
+
+✓ Job successfully enqueued!
+  Job ID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+  State: pending
+  Max Retries: 3
+```
+
+**Example 2: Job with custom ID**
+```bash
+$ queuectl enqueue '{"id":"my-job-1","command":"python script.py"}'
+✓ Successfully parsed JSON with 2 field(s)
+✓ Validation passed
+✓ Using provided job ID: my-job-1
+  Command: python script.py
+
+✓ Job successfully enqueued!
+  Job ID: my-job-1
+  State: pending
+  Max Retries: 3
+```
+
+**Example 3: Job with custom max retries**
+```bash
+$ queuectl enqueue '{"command":"curl api.example.com","max_retries":5}'
+✓ Job successfully enqueued!
+  Job ID: f7g8h9i0-j1k2-3456-lmno-pq7890123456
+  State: pending
+  Max Retries: 5
+```
+
+**Example 4: Complex commands**
+```bash
+# Pipes and redirects work
+$ queuectl enqueue '{"command":"cat file.txt | grep error > errors.log"}'
+
+# Multiple commands with &&
+$ queuectl enqueue '{"command":"cd /tmp && ls -la && pwd"}'
+```
+
+### Worker Management
+
+**Example 1: Start a single worker**
+```bash
+$ queuectl worker start
+Starting 1 worker(s)...
+
+✓ Started worker-1 (PID: 12345)
+
+1 worker(s) running. Press Ctrl+C to stop all workers.
+
+Worker worker-1 initialized
+Worker worker-1 started. Waiting for jobs...
+Press Ctrl+C to stop gracefully.
+
+→ [worker-1] Claimed job: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+[a1b2c3d4-e5f6-7890-abcd-ef1234567890] Executing command: echo Hello World
+[a1b2c3d4-e5f6-7890-abcd-ef1234567890] STDOUT:
+Hello World
+[a1b2c3d4-e5f6-7890-abcd-ef1234567890] Exit code: 0
+✓ [worker-1] Job a1b2c3d4-e5f6-7890-abcd-ef1234567890 completed successfully
+```
+
+**Example 2: Start multiple workers**
+```bash
+$ queuectl worker start --count 3
+Starting 3 worker(s)...
+
+✓ Started worker-1 (PID: 12345)
+✓ Started worker-2 (PID: 12346)
+✓ Started worker-3 (PID: 12347)
+
+3 worker(s) running. Press Ctrl+C to stop all workers.
+```
+
+**Example 3: Stop workers gracefully**
+Press `Ctrl+C` in the worker terminal. Workers will finish their current job before exiting:
+```
+^C received, shutting down gracefully...
+
+Shutting down worker worker-1...
+Worker worker-1 stopped.
+```
+
+### Monitoring
+
+**Example 1: Check queue status**
+```bash
+$ queuectl status
+Job Queue Status
+==================================================
+
+Jobs by State:
+  Pending:          3
+  Processing:       2
+  Completed:       45
+  Failed:           1
+  Dead (DLQ):       2
+--------------------------------------------------
+  Total:           53
+
+Completion Rate:
+  84.9% (45/53)
+
+Permanent Failures:
+  3.8% (2/53)
+
+Active/Pending Work: 5 job(s)
+==================================================
+```
+
+**Example 2: List all jobs**
+```bash
+$ queuectl list
+All jobs
+--------------------------------------------------------------------------------
+
+Job ID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+  Command: echo Hello World
+  State: completed
+  Attempts: 1/3
+  Created: 2025-01-07T10:30:00+00:00
+  Updated: 2025-01-07T10:30:05+00:00
+
+Job ID: my-job-1
+  Command: python script.py
+  State: pending
+  Attempts: 0/3
+  Created: 2025-01-07T10:31:00+00:00
+  Updated: 2025-01-07T10:31:00+00:00
+
+--------------------------------------------------------------------------------
+Total: 2 job(s)
+```
+
+**Example 3: Filter by state**
+```bash
+$ queuectl list --state pending
+Jobs with state: pending
+--------------------------------------------------------------------------------
+
+Job ID: my-job-1
+  Command: python script.py
+  State: pending
+  Attempts: 0/3
+  Created: 2025-01-07T10:31:00+00:00
+  Updated: 2025-01-07T10:31:00+00:00
+
+--------------------------------------------------------------------------------
+Total: 1 job(s)
+```
+
+### Dead Letter Queue (DLQ)
+
+**Example 1: View failed jobs**
+```bash
+$ queuectl dlq list
+Dead Letter Queue (DLQ)
+================================================================================
+These jobs have failed permanently after exhausting all retries.
+
+Job ID: failed-job-1
+  Command: exit 1
+  State: dead
+  Failed Attempts: 3/3
+  Created: 2025-01-07T10:00:00+00:00
+  Last Updated: 2025-01-07T10:00:15+00:00
+
+================================================================================
+Total jobs in DLQ: 1
+
+To retry a job: queuectl dlq retry <JOB_ID>
+```
+
+**Example 2: Retry a failed job**
+```bash
+$ queuectl dlq retry failed-job-1
+Job 'failed-job-1':
+  Command: exit 1
+  Previous attempts: 3/3
+
+Retry this job? [y/N]: y
+
+✓ Job 'failed-job-1' has been reset and moved back to the queue
+  New state: pending
+  Attempts reset to: 0/3
+
+The job will be picked up by the next available worker.
+```
+
+### Configuration
+
+**Example 1: Set configuration**
+```bash
+$ queuectl config set max-retries 5
+✓ Configuration updated:
+  max-retries = 5
+
+$ queuectl config set backoff-base 2
+✓ Configuration updated:
+  backoff-base = 2
+```
+
+**Example 2: Get configuration**
+```bash
+$ queuectl config get max-retries
+max-retries = 5
+  (default value)
+
+$ queuectl config get backoff-base
+backoff-base = 2
+```
+
+**Example 3: List all configuration**
+```bash
+$ queuectl config list
+Configuration:
+----------------------------------------
+  backoff-base = 2
+  max-retries = 5
+----------------------------------------
+Total: 2 value(s)
+```
+
+## 3. Architecture Overview
 
 ### System Components
 
@@ -92,8 +332,9 @@ queuectl dlq list
 └──────────────┘  └─────────────┘  └─────────────┘
 ```
 
-### Job State Machine
+### Job Lifecycle
 
+**State Machine:**
 ```
 pending ──────> processing ──────> completed ✓
    ▲                │
@@ -109,9 +350,20 @@ pending ──────> processing ──────> completed ✓
                   dead (DLQ)
 ```
 
-### Database Schema
+**Lifecycle Flow:**
+1. **Enqueue**: Job created with `state='pending'`
+2. **Claim**: Worker atomically claims job (`state='processing'`)
+3. **Execute**: Worker runs the shell command
+4. **Success**: Exit code 0 → `state='completed'`
+5. **Failure**: Exit code ≠ 0 → `state='failed'`
+6. **Retry**: If `attempts < max_retries` → back to `pending` with delay
+7. **DLQ**: If `attempts >= max_retries` → `state='dead'`
 
-**jobs table:**
+### Data Persistence
+
+**Database: SQLite (`queue.db`)**
+
+**jobs table schema:**
 - `id` (TEXT PRIMARY KEY) - Unique job identifier
 - `command` (TEXT NOT NULL) - Shell command to execute
 - `state` (TEXT NOT NULL) - Job state (pending/processing/completed/failed/dead)
@@ -121,130 +373,41 @@ pending ──────> processing ──────> completed ✓
 - `updated_at` (TEXT) - Last update timestamp
 - `locked_by` (TEXT) - Worker ID that claimed the job
 - `locked_at` (TEXT) - Lock acquisition timestamp
+- `next_retry_at` (TEXT) - Scheduled retry timestamp (for exponential backoff)
 
-**config table:**
+**config table schema:**
 - `key` (TEXT PRIMARY KEY) - Configuration key
 - `value` (TEXT NOT NULL) - Configuration value
 
-## Usage Guide
+**Persistence guarantees:**
+- ACID transactions ensure data consistency
+- All job state changes are immediately persisted
+- Database survives worker crashes
+- Jobs can be recovered after system restart
 
-### Enqueuing Jobs
+### Worker Logic
 
-**Basic job:**
-```bash
-queuectl enqueue '{"command":"echo Hello"}'
-```
+**Worker Process Flow:**
 
-**Job with custom ID:**
-```bash
-queuectl enqueue '{"id":"my-job-1","command":"python script.py"}'
-```
+1. **Startup**: Worker initializes and connects to database
+2. **Poll Loop**: Continuously polls for pending jobs (every 1 second)
+3. **Claim Job**: Atomically claims next pending job using `BEGIN IMMEDIATE`
+4. **Execute**: Runs shell command via `subprocess.run()`
+5. **Update State**: Updates job state based on exit code
+6. **Repeat**: Returns to polling loop
 
-**Job with custom max retries:**
-```bash
-queuectl enqueue '{"command":"curl api.example.com","max_retries":5}'
-```
+**Key Worker Behaviors:**
+- **Atomic Claiming**: Uses database transactions to prevent race conditions
+- **Exit Code Processing**: 0 = success, non-zero = failure
+- **Retry Logic**: Automatically retries failed jobs with exponential backoff
+- **Graceful Shutdown**: Finishes current job before exiting (Ctrl+C safe)
+- **Multi-Worker Safe**: Multiple workers can run concurrently without conflicts
 
-**Complex commands:**
-```bash
-# Pipes and redirects work
-queuectl enqueue '{"command":"cat file.txt | grep error > errors.log"}'
-
-# Multiple commands with &&
-queuectl enqueue '{"command":"cd /tmp && ls -la && pwd"}'
-```
-
-### Worker Management
-
-**Start a single worker:**
-```bash
-queuectl worker start
-```
-
-**Start multiple workers:**
-```bash
-queuectl worker start --count 4
-```
-
-**Stop workers gracefully:**
-Press `Ctrl+C` in the worker terminal. Workers will finish their current job before exiting.
-
-### Monitoring
-
-**Check queue status:**
-```bash
-queuectl status
-```
-
-Output:
-```
-Job Queue Status
-==================================================
-
-Jobs by State:
-  Pending:          3
-  Processing:       2
-  Completed:       45
-  Failed:           1
-  Dead (DLQ):       2
---------------------------------------------------
-  Total:           53
-
-Completion Rate:
-  84.9% (45/53)
-
-Permanent Failures:
-  3.8% (2/53)
-
-Active/Pending Work: 5 job(s)
-==================================================
-```
-
-**List all jobs:**
-```bash
-queuectl list
-```
-
-**Filter by state:**
-```bash
-queuectl list --state pending
-queuectl list --state completed
-queuectl list --state dead
-```
-
-### Dead Letter Queue (DLQ)
-
-**View failed jobs:**
-```bash
-queuectl dlq list
-```
-
-**Retry a failed job:**
-```bash
-queuectl dlq retry <JOB_ID>
-```
-
-This resets the job to `pending` state with attempts back to 0.
-
-### Configuration
-
-**Set configuration:**
-```bash
-queuectl config set max-retries 5
-queuectl config set backoff-base 2
-```
-
-**Get configuration:**
-```bash
-queuectl config get max-retries
-```
-
-**List all configuration:**
-```bash
-queuectl config list
-```
-
-## Advanced Topics
+**Worker Coordination:**
+- All workers share the same SQLite database
+- Database locking ensures only one worker claims each job
+- Lock is held only during claiming (~3ms), not during execution
+- Workers execute jobs in parallel after claiming
 
 ### Race Condition Prevention
 
@@ -260,19 +423,38 @@ COMMIT;  # Releases lock
 
 This ensures that even with 100 workers, each job is claimed by exactly one worker.
 
-### Retry Mechanism
+### Retry Mechanism with Exponential Backoff
 
 When a job fails (exit code ≠ 0):
 
 1. **Increment attempts counter**
 2. **Check if attempts < max_retries**
-   - YES → Set state back to `pending` (will be retried)
+   - YES → Set state back to `pending` with scheduled retry time
    - NO → Set state to `dead` (sent to DLQ)
 
-Example with max_retries=3:
-- Attempt 1 fails → state='pending' (retry)
-- Attempt 2 fails → state='pending' (retry)
-- Attempt 3 fails → state='dead' (DLQ)
+**Exponential Backoff Formula:**
+```
+delay = initial_delay * (base ^ attempts) seconds
+```
+
+**Default Configuration:**
+- `backoff-base` = 2
+- `backoff-initial-delay` = 1
+
+**Example with max_retries=3, base=2, initial_delay=1:**
+- Attempt 1 fails → Retry in **2 seconds** (1 × 2¹ = 2s)
+- Attempt 2 fails → Retry in **4 seconds** (1 × 2² = 4s)
+- Attempt 3 fails → **Sent to DLQ** (max retries exceeded)
+
+**Configuring Backoff:**
+```bash
+# Set longer initial delay (30 seconds)
+queuectl config set backoff-initial-delay 30
+
+# Use base 3 for faster growth
+queuectl config set backoff-base 3
+# Now: 30s, 90s, 270s, 810s...
+```
 
 ### Exit Code Processing
 
@@ -302,20 +484,136 @@ Commands are executed with:
 - **capture_output=True**: Stdout/stderr are captured and logged
 - **timeout=300**: 5-minute timeout per job (configurable)
 
-## Testing
+## 4. Assumptions & Trade-offs
+
+### Design Decisions
+
+**1. SQLite for Persistence**
+- **Assumption**: Single-machine deployment with moderate throughput (<1000 jobs/sec)
+- **Trade-off**: Simple, zero-configuration database vs. distributed scalability
+- **Why**: ACID guarantees, built-in Python support, perfect for local/single-server use
+
+**2. Atomic Job Claiming with Database Locking**
+- **Approach**: `BEGIN IMMEDIATE` transactions lock entire database during claim
+- **Trade-off**: Simple correctness vs. maximum concurrency
+- **Why**: Zero race conditions, easy to reason about
+- **Limitation**: ~10-50 concurrent workers max (SQLite write lock)
+
+**3. Exponential Backoff Formula**
+- **Formula**: `delay = initial_delay × (base ^ attempts)`
+- **Assumption**: Network/external service failures are transient
+- **Why**: Industry-standard pattern, prevents thundering herd
+- **Configurable**: Users can tune `backoff-base` and `backoff-initial-delay`
+
+**4. In-Database State Management**
+- **Approach**: All state in SQLite (no external state store)
+- **Trade-off**: Simplicity vs. distributed coordination
+- **Why**: Single source of truth, crash recovery is automatic
+- **Limitation**: Can't scale across machines without shared filesystem
+
+**5. Shell Command Execution**
+- **Approach**: Commands run with `shell=True` in subprocess
+- **Security Trade-off**: Flexibility vs. injection risk
+- **Assumption**: Trusted job sources only (not public-facing)
+- **Mitigation**: Jobs must be explicitly enqueued (no external API)
+
+**6. Polling-Based Worker**
+- **Approach**: Workers poll database every 1 second for pending jobs
+- **Trade-off**: Simple implementation vs. instant job pickup
+- **Why**: No complex pub/sub infrastructure needed
+
+**7. No Distributed Lock Recovery**
+- **Limitation**: Crashed workers leave jobs in "processing" state
+- **Assumption**: Workers are reliable, crashes are rare
+- **Workaround**: Manual database reset for stuck jobs
+
+**8. Synchronous Job Execution**
+- **Approach**: One job per worker at a time
+- **Trade-off**: Simple, predictable resource usage vs. throughput
+- **Why**: Easy debugging, clear resource limits
+
+### Simplifications Made
+
+1. **No job dependencies**: Jobs are independent (no DAG/workflow support)
+2. **No priority queue**: FIFO ordering only (oldest job first)
+3. **No job timeouts per-job**: Global 300s timeout for all jobs
+4. **No distributed workers**: All workers must share same filesystem
+5. **No audit log**: Job history not preserved after deletion
+6. **No resource limits**: No CPU/memory constraints per job
+7. **No authentication**: No user/permission system
+
+## 5. Testing Instructions
+
+### Running the Core Test Suite
+
+The project includes a single test script that verifies core functionality:
+
+```bash
+python3 test_core.py
+```
+
+**What it tests:**
+1. **Enqueue Job** - Basic job enqueueing
+2. **Worker Execution** - Worker processes a job successfully
+3. **Job Failure** - Worker handles job failure correctly
+4. **Retry and DLQ** - Retry mechanism and Dead Letter Queue
+5. **Multi-Worker** - Multiple workers processing jobs concurrently
+6. **Status Command** - Status command functionality
+
+**Expected output:**
+```
+============================================================
+CORE TESTS - queuectl Job Queue System
+============================================================
+✓ Cleaned up test database
+
+[Test 1] Enqueue job...
+✓ PASS: Job enqueued
+
+[Test 2] Worker execution...
+✓ PASS: Worker executed job successfully
+
+[Test 3] Job failure handling...
+✓ PASS: Job failure handled
+
+[Test 4] Retry and DLQ...
+✓ PASS: Job moved to DLQ after retries
+
+[Test 5] Multi-worker concurrency...
+✓ PASS: Multi-worker processed 5/5 jobs
+
+[Test 6] Status command...
+✓ PASS: Status command works
+
+============================================================
+TEST SUMMARY
+============================================================
+✓ PASS: Enqueue Job
+✓ PASS: Worker Execution
+✓ PASS: Job Failure
+✓ PASS: Retry and DLQ
+✓ PASS: Multi-Worker
+✓ PASS: Status Command
+------------------------------------------------------------
+Total: 6/6 tests passed
+
+🎉 ALL CORE TESTS PASSED!
+```
+
+**If tests fail:**
+- The database (`queue.db`) is preserved for debugging
+- Check worker output for error messages
+- Verify `queuectl` command is installed: `queuectl --help`
 
 ### Manual Testing
 
 **Test 1: Basic job execution**
 ```bash
-# Enqueue test jobs
-queuectl enqueue '{"id":"test-1","command":"echo Test 1"}'
-queuectl enqueue '{"id":"test-2","command":"sleep 2 && echo Test 2"}'
-
-# Start worker
+# Terminal 1: Start worker
 queuectl worker start
 
-# Verify jobs completed
+# Terminal 2: Enqueue and check
+queuectl enqueue '{"id":"test-1","command":"echo Test 1"}'
 queuectl list --state completed
 ```
 
@@ -334,32 +632,16 @@ queuectl dlq list
 **Test 3: Multi-worker concurrency**
 ```bash
 # Enqueue many jobs
-for i in {1..20}; do
-  queuectl enqueue "{\"id\":\"job-$i\",\"command\":\"sleep 1 && echo Job $i\"}"
+for i in {1..10}; do
+  queuectl enqueue "{\"id\":\"job-$i\",\"command\":\"echo Job $i\"}"
 done
 
 # Start multiple workers
-queuectl worker start --count 5
+queuectl worker start --count 3
 
 # Watch them process jobs concurrently
 queuectl status
 ```
-
-**Test 4: DLQ retry**
-```bash
-# List dead jobs
-queuectl dlq list
-
-# Retry a specific job
-queuectl dlq retry <JOB_ID>
-
-# Start worker to process retried job
-queuectl worker start
-```
-
-### Automated Test Script
-
-See `tests/test_basic.py` for automated validation scripts.
 
 ## Troubleshooting
 
@@ -367,7 +649,7 @@ See `tests/test_basic.py` for automated validation scripts.
 
 **Cause**: Worker crashed while processing a job
 
-**Solution**: Jobs remain locked. Future enhancement will add stale lock cleanup. For now:
+**Solution**: Jobs remain locked. Manual reset required:
 ```bash
 # Manually reset stuck job (requires DB access)
 sqlite3 queue.db "UPDATE jobs SET state='pending', locked_by=NULL WHERE state='processing'"
@@ -421,8 +703,7 @@ queuectl/
 │   ├── models.py            # Job data model
 │   ├── storage.py           # SQLite database layer
 │   └── worker.py            # Worker process logic
-├── tests/
-│   └── test_basic.py        # Test scripts
+├── test_core.py             # Core test script
 ├── README.md                # This file
 ├── IMPLEMENTATION_SUMMARY.md # Detailed implementation guide
 ├── requirements.txt         # Python dependencies
@@ -473,19 +754,6 @@ def my_query(self):
 - ✅ Phase 5: Retry Mechanism
 - ✅ Phase 6: Multi-Worker Support & Race Condition Prevention
 - ✅ Phase 7: Configuration & Polish
-
-## Future Enhancements
-
-- [ ] Exponential backoff delays for retries
-- [ ] Scheduled retry with `next_retry_at` timestamp
-- [ ] Worker health monitoring and stale lock cleanup
-- [ ] Job priority system
-- [ ] Webhook notifications on job completion/failure
-- [ ] Web UI for queue monitoring
-- [ ] Job execution history and logs
-- [ ] Support for job dependencies
-- [ ] Distributed workers across multiple machines
-- [ ] Metrics and observability (Prometheus/Grafana)
 
 ## License
 

@@ -91,37 +91,59 @@ class Worker:
         """
         Mark a job as failed and decide whether to retry or send to DLQ.
 
-        Uses retry logic:
-        - If attempts < max_retries: Set state to 'pending' (retry)
+        Uses retry logic with exponential backoff:
+        - If attempts < max_retries: Set state to 'pending' (retry) with delay
         - If attempts >= max_retries: Set state to 'dead' (DLQ)
+
+        Exponential backoff formula: delay = backoff_base ^ attempts seconds
 
         Args:
             job_id: The job ID to update
             attempts: Current number of attempts (will be incremented)
             max_retries: Maximum retry attempts allowed
         """
+        from datetime import datetime, timezone, timedelta
+
         new_attempts = attempts + 1
 
         # Decide: Retry or DLQ?
         if self.should_retry(new_attempts, max_retries):
             # Still have retries left - set back to pending for retry
             new_state = 'pending'
+
+            # Calculate exponential backoff delay
+            # Formula: delay = initial_delay * (base ^ attempts) seconds
+            backoff_base = int(self.storage.get_config('backoff-base', '2'))
+            initial_delay = int(self.storage.get_config('backoff-initial-delay', '1'))
+            delay_seconds = initial_delay * (backoff_base ** new_attempts)
+
+            # Calculate next retry time
+            next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+
             print(f"  → Job will retry (attempt {new_attempts}/{max_retries})")
+            print(f"  → Retry scheduled in {delay_seconds} seconds (at {next_retry_at.strftime('%H:%M:%S')})")
+
+            # Update with retry scheduling
+            self.storage.update_job(job_id, {
+                'state': new_state,
+                'attempts': new_attempts,
+                'next_retry_at': next_retry_at.isoformat(),
+                'locked_by': None,   # Release the lock
+                'locked_at': None    # Clear lock timestamp
+            })
         else:
             # Out of retries - send to Dead Letter Queue
             new_state = 'dead'
             print(f"  → Job sent to DLQ (max retries {max_retries} exceeded)")
 
-        # Update job state, attempts, and clear lock
-        # Clear lock so:
-        # - If retrying (pending): another worker can claim it
-        # - If DLQ (dead): it's clear no worker owns it
-        self.storage.update_job(job_id, {
-            'state': new_state,
-            'attempts': new_attempts,
-            'locked_by': None,   # Release the lock
-            'locked_at': None    # Clear lock timestamp
-        })
+            # Update to DLQ (no retry scheduling needed)
+            self.storage.update_job(job_id, {
+                'state': new_state,
+                'attempts': new_attempts,
+                'next_retry_at': None,
+                'locked_by': None,   # Release the lock
+                'locked_at': None    # Clear lock timestamp
+            })
 
     def execute_command(self, command: str, job_id: str) -> int:
         """

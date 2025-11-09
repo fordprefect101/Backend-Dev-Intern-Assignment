@@ -413,7 +413,7 @@ def set(key, value):
         storage = Storage()
 
         # Validate known config keys (optional - warn if unknown)
-        known_keys = ['max-retries', 'backoff-base']
+        known_keys = ['max-retries', 'backoff-base', 'backoff-initial-delay']
         if key not in known_keys:
             click.echo(f"Warning: '{key}' is not a standard config key.", err=True)
             click.echo(f"Known keys: {', '.join(known_keys)}", err=True)
@@ -449,7 +449,8 @@ def get(key):
         # Define defaults for known keys
         defaults = {
             'max-retries': '3',
-            'backoff-base': '2'
+            'backoff-base': '2',
+            'backoff-initial-delay': '1'
         }
 
         default = defaults.get(key)
@@ -484,6 +485,7 @@ def list_config():
             click.echo("\nDefaults:")
             click.echo("  max-retries = 3")
             click.echo("  backoff-base = 2")
+            click.echo("  backoff-initial-delay = 1")
             return
 
         click.echo("Configuration:")

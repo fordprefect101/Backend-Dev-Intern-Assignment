@@ -16,13 +16,16 @@ class Storage:
     - config table: stores system configuration
     """
 
-    def __init__(self, db_path: str = "queue.db"):
+    def __init__(self, db_path: str = None):
         """
         Initialize storage with database path.
 
         Args:
-            db_path: Path to SQLite database file
+            db_path: Path to SQLite database file (defaults to QUEUECTL_DB_PATH env var or 'queue.db')
         """
+        if db_path is None:
+            # Check environment variable first, then use default
+            db_path = os.environ.get('QUEUECTL_DB_PATH', 'queue.db')
         self.db_path = db_path
         self._ensure_db_exists()
 
@@ -71,7 +74,8 @@ class Storage:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 locked_by TEXT,
-                locked_at TEXT
+                locked_at TEXT,
+                next_retry_at TEXT
             )
         """)
 
@@ -91,6 +95,9 @@ class Storage:
 
         # Migrate existing database: Add locking columns if they don't exist
         self._migrate_add_locking_fields(conn)
+
+        # Migrate existing database: Add retry scheduling field
+        self._migrate_add_retry_at_field(conn)
 
         conn.commit()
 
@@ -112,6 +119,21 @@ class Storage:
         # Add locked_at if missing
         if 'locked_at' not in columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN locked_at TEXT")
+
+    def _migrate_add_retry_at_field(self, conn: sqlite3.Connection):
+        """
+        Migration: Add next_retry_at field to existing jobs table.
+
+        This handles databases created before Phase 8 (Exponential Backoff).
+        Safely adds next_retry_at column if it doesn't exist.
+        """
+        # Check if next_retry_at column exists
+        cursor = conn.execute("PRAGMA table_info(jobs)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        # Add next_retry_at if missing
+        if 'next_retry_at' not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN next_retry_at TEXT")
 
     def get_connection(self):
         """
@@ -146,8 +168,8 @@ class Storage:
         """
         with self._get_connection() as conn:
             conn.execute("""
-                INSERT INTO jobs (id, command, state, attempts, max_retries, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO jobs (id, command, state, attempts, max_retries, created_at, updated_at, next_retry_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 job_data['id'],
                 job_data['command'],
@@ -155,7 +177,8 @@ class Storage:
                 job_data.get('attempts', 0),
                 job_data.get('max_retries', 3),
                 job_data['created_at'],
-                job_data['updated_at']
+                job_data['updated_at'],
+                job_data.get('next_retry_at')
             ))
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
@@ -177,7 +200,7 @@ class Storage:
         """
         with self._get_connection() as conn:
             cursor = conn.execute("""
-                SELECT id, command, state, attempts, max_retries, created_at, updated_at, locked_by, locked_at
+                SELECT id, command, state, attempts, max_retries, created_at, updated_at, locked_by, locked_at, next_retry_at
                 FROM jobs
                 WHERE id = ?
             """, (job_id,))
@@ -261,7 +284,7 @@ class Storage:
             completed_jobs = storage.list_jobs(state='completed', limit=10)
         """
         sql = """
-            SELECT id, command, state, attempts, max_retries, created_at, updated_at, locked_by, locked_at
+            SELECT id, command, state, attempts, max_retries, created_at, updated_at, locked_by, locked_at, next_retry_at
             FROM jobs
         """
         params = []
@@ -290,8 +313,9 @@ class Storage:
         """
         Atomically claim the next pending job for a worker.
 
-        PRODUCTION-GRADE: Race condition safe!
+        PRODUCTION-GRADE: Race condition safe with exponential backoff!
         Uses database transactions to ensure only ONE worker claims each job.
+        Only claims jobs that are ready to be retried (next_retry_at has passed).
 
         Args:
             worker_id: Unique identifier for the worker claiming the job
@@ -301,7 +325,7 @@ class Storage:
 
         How it works:
             1. Start a transaction with BEGIN IMMEDIATE (locks database)
-            2. Find first pending job that is NOT locked
+            2. Find first pending job that is NOT locked and ready for retry
             3. Atomically update it with worker_id and lock timestamp
             4. Return the job to the worker
             5. If another worker already claimed it, this returns None
@@ -320,14 +344,19 @@ class Storage:
             conn.execute("BEGIN IMMEDIATE")
 
             try:
-                # Find first pending job that isn't locked
+                # Get current time for retry check
+                now = datetime.now(timezone.utc).isoformat()
+
+                # Find first pending job that isn't locked and is ready for retry
                 cursor = conn.execute("""
-                    SELECT id, command, state, attempts, max_retries, created_at, updated_at, locked_by, locked_at
+                    SELECT id, command, state, attempts, max_retries, created_at, updated_at, locked_by, locked_at, next_retry_at
                     FROM jobs
-                    WHERE state = 'pending' AND locked_by IS NULL
+                    WHERE state = 'pending'
+                      AND locked_by IS NULL
+                      AND (next_retry_at IS NULL OR next_retry_at <= ?)
                     ORDER BY created_at ASC
                     LIMIT 1
-                """)
+                """, (now,))
 
                 row = cursor.fetchone()
 

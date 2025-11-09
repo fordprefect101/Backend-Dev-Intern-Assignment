@@ -17,6 +17,7 @@ class Job:
         max_retries: Maximum number of retry attempts allowed
         created_at: When the job was created
         updated_at: When the job was last updated
+        next_retry_at: When the job should be retried (for exponential backoff)
     """
 
     def __init__(
@@ -27,7 +28,8 @@ class Job:
         attempts: int = 0,
         max_retries: int = 3,
         created_at: Optional[str] = None,
-        updated_at: Optional[str] = None
+        updated_at: Optional[str] = None,
+        next_retry_at: Optional[str] = None
     ):
         self.id = id
         self.command = command
@@ -36,6 +38,7 @@ class Job:
         self.max_retries = max_retries
         self.created_at = created_at or datetime.now(timezone.utc).isoformat()
         self.updated_at = updated_at or datetime.now(timezone.utc).isoformat()
+        self.next_retry_at = next_retry_at
 
     def to_dict(self):
         """Convert Job to dictionary for storage."""
@@ -46,7 +49,8 @@ class Job:
             'attempts': self.attempts,
             'max_retries': self.max_retries,
             'created_at': self.created_at,
-            'updated_at': self.updated_at
+            'updated_at': self.updated_at,
+            'next_retry_at': self.next_retry_at
         }
 
     @classmethod
@@ -59,7 +63,8 @@ class Job:
             attempts=data['attempts'],
             max_retries=data['max_retries'],
             created_at=data['created_at'],
-            updated_at=data['updated_at']
+            updated_at=data['updated_at'],
+            next_retry_at=data.get('next_retry_at')
         )
 
     def __repr__(self):

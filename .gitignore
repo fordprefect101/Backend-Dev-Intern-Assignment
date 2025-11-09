@@ -49,3 +49,8 @@ Thumbs.db
 plan.md
 IMPLEMENTATION_SUMMARY.md
 assignment.md
+PRODUCTION_ROADMAP.md
+
+# Tests
+tests/
+pytest.ini
